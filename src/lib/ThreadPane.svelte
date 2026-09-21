@@ -105,12 +105,11 @@
 >
   <header>
     <div class="title">{thread.title || "New thread"}</div>
-    <div class="where">
+    <div class="where" title="{project?.name ?? thread.project}{branch ? ` · ${branch}` : ''}">
       <span>{project?.name ?? thread.project}</span>
       {#if branch}<span class="branch"> {branch}</span>{/if}
       {#if thread.branch}<span class="wt" title={thread.cwd}>worktree</span>{/if}
-      <span class="sep">·</span>
-      <span>{view.agentName ?? agent?.name ?? thread.agent}</span>
+      <span class="agentname"><span class="sep">·</span>{agent?.name ?? view.agentName ?? thread.agent}</span>
     </div>
     <div class="toggles">
       <button class:on={app.panels.changes} title="Review changes (Ctrl+Shift+G)" onclick={() => (app.panels.changes = !app.panels.changes)}>
@@ -209,18 +208,39 @@
     padding: 10px 24px;
     border-bottom: 1px solid var(--muted);
     min-width: 0;
+    container-type: inline-size;
   }
+  /* The title and location give way; the panel toggles never do. */
   .title {
+    flex: 0 1 auto;
+    min-width: 6ch;
     font-weight: 700;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
   .where {
+    flex: 1 1 0;
+    min-width: 0;
+    text-align: right;
     color: var(--dark-foreground);
     font-size: 12px;
     white-space: nowrap;
-    margin-left: auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .toggles {
+    flex: none;
+  }
+  @container (max-width: 720px) {
+    .agentname {
+      display: none;
+    }
+  }
+  @container (max-width: 480px) {
+    .where {
+      display: none;
+    }
   }
   .wt {
     margin-left: 1ch;

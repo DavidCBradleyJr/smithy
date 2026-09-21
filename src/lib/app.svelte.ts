@@ -47,9 +47,17 @@ class App {
     return reduce(this.events[id] ?? []);
   }
 
+  /** Threads whose agent this window has (re)connected. */
+  #connected = new Set<string>();
+
   async open(id: string) {
     this.view = { name: "thread", id };
     if (!this.events[id]) this.events[id] = await api.history(id);
+    // Reconnect in the background so the composer's options are current.
+    if (!this.#connected.has(id)) {
+      this.#connected.add(id);
+      api.resume(id).catch(() => this.#connected.delete(id));
+    }
   }
 
   async addProject(path: string) {
@@ -69,6 +77,7 @@ class App {
     // Show the thread immediately; the agent's startup events stream in.
     const t = await api.createThread(project, agent, worktree);
     this.threads.unshift(t);
+    this.#connected.add(t.id);
     this.events[t.id] = await api.history(t.id);
     this.view = { name: "thread", id: t.id };
   }

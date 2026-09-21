@@ -209,9 +209,12 @@ async fn ensure_live<R: Runtime>(app: &AppHandle<R>, thread_id: &str) -> Result<
         }
     }
 
-    // Local models: start on whatever is already in VRAM rather than making
-    // the router swap models just because a thread was opened.
-    if t.agent == "pi" && !resumed {
+    // Local models: a thread connects on whatever is already in VRAM, so
+    // opening a thread never makes the router swap models behind your back.
+    // (A resumed session whose model was renamed also falls back to Pi's first
+    // model, which is rarely the loaded one.) Switching is an explicit choice
+    // in the model picker.
+    if t.agent == "pi" {
         if let Some(loaded) = crate::local::state().await.loaded {
             let value = format!("{}/{}", crate::local::PI_PROVIDER, loaded.id);
             if wants_change(&config, "model", &value) {
@@ -342,6 +345,13 @@ pub async fn thread_create<R: Runtime>(
         mgr.record(&app, &t.id, json!({ "t": "error", "message": e }));
     }
     Ok(t)
+}
+
+/// Reconnects a thread's agent in the background when it's opened, so the
+/// composer shows the agent's current options rather than stale ones.
+#[tauri::command]
+pub async fn thread_resume<R: Runtime>(app: AppHandle<R>, id: String) -> Result<(), String> {
+    ensure_live(&app, &id).await.map(|_| ())
 }
 
 #[tauri::command]

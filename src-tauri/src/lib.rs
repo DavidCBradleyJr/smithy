@@ -49,6 +49,7 @@ pub fn run() {
             agents::thread_live,
             agents::thread_create,
             agents::thread_history,
+            agents::thread_resume,
             agents::thread_delete,
             agents::thread_prompt,
             agents::thread_cancel,

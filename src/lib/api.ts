@@ -139,6 +139,7 @@ export const api = {
   createThread: (project: string, agent: string, worktree: boolean) =>
     invoke<Thread>("thread_create", { project, agent, worktree }),
   history: (id: string) => invoke<RawEvent[]>("thread_history", { id }),
+  resume: (id: string) => invoke<void>("thread_resume", { id }),
   deleteThread: (id: string, force = false) => invoke<void>("thread_delete", { id, force }),
   prompt: (id: string, text: string) => invoke<string>("thread_prompt", { id, text }),
   cancel: (id: string) => invoke<void>("thread_cancel", { id }),
