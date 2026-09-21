@@ -2,6 +2,8 @@
 name = "smithy"
 version = "0.1.0"
 description = "A local-first coding agent workbench for Omarchy"
+license = "MIT"
+repository = "https://github.com/DavidCBradleyJr/smithy"
 authors = ["David Bradley"]
 edition = "2021"
 
