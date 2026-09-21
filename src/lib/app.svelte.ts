@@ -3,6 +3,10 @@
 import { listen } from "@tauri-apps/api/event";
 import { api, type Agent, type Project, type Thread } from "./api";
 import { reduce, type RawEvent, type ThreadView } from "./reduce";
+import type { ReviewComment } from "./review";
+
+export type { ReviewComment } from "./review";
+export { reviewPrompt } from "./review";
 
 export type View = { name: "thread"; id: string } | { name: "new"; project: string } | { name: "models" } | { name: "settings" } | { name: "home" };
 
@@ -16,6 +20,10 @@ class App {
   events = $state<Record<string, RawEvent[]>>({});
   /** Threads with a prompt in flight from this window. */
   inflight = $state<Record<string, boolean>>({});
+  /** Review comments not yet sent to the agent, per thread. */
+  comments = $state<Record<string, ReviewComment[]>>({});
+  /** Which side panels are open (shared across threads). */
+  panels = $state({ changes: false, terminal: false });
 
   current = $derived(this.view.name === "thread" ? this.threads.find((t) => t.id === (this.view as any).id) ?? null : null);
 
@@ -57,16 +65,17 @@ class App {
     if (this.view.name === "new" && this.view.project === path) this.view = { name: "home" };
   }
 
-  async newThread(project: string, agent: string) {
+  async newThread(project: string, agent: string, worktree = false) {
     // Show the thread immediately; the agent's startup events stream in.
-    const t = await api.createThread(project, agent);
+    const t = await api.createThread(project, agent, worktree);
     this.threads.unshift(t);
     this.events[t.id] = await api.history(t.id);
     this.view = { name: "thread", id: t.id };
   }
 
-  async deleteThread(id: string) {
-    await api.deleteThread(id);
+  /** Throws "uncommitted changes in the worktree" unless `force`. */
+  async deleteThread(id: string, force = false) {
+    await api.deleteThread(id, force);
     this.threads = this.threads.filter((t) => t.id !== id);
     delete this.events[id];
     if (this.view.name === "thread" && this.view.id === id) this.view = { name: "home" };

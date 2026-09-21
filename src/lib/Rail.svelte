@@ -14,6 +14,8 @@
 
   let collapsed = $state<Record<string, boolean>>({});
   let confirmDelete = $state<string | null>(null);
+  /** Worktree threads whose delete was refused because of uncommitted work. */
+  let dirty = $state<string | null>(null);
 
   async function addProject() {
     const dir = await pickFolder({ directory: true, title: "Add project folder" });
@@ -24,12 +26,19 @@
     return app.threads.filter((t) => t.project === path);
   }
 
-  function del(e: MouseEvent, id: string) {
+  async function del(e: MouseEvent, id: string) {
     e.stopPropagation();
-    if (confirmDelete === id) {
-      app.deleteThread(id);
+    if (confirmDelete !== id) {
+      confirmDelete = id;
+      return;
+    }
+    try {
+      await app.deleteThread(id, dirty === id);
       confirmDelete = null;
-    } else confirmDelete = id;
+      dirty = null;
+    } catch (err) {
+      if (String(err).includes("uncommitted")) dirty = id;
+    }
   }
 
   const active = $derived(app.view.name === "thread" ? app.view.id : null);
@@ -58,7 +67,7 @@
               tabindex="0"
               onclick={() => app.open(t.id)}
               onkeydown={(e) => e.key === "Enter" && app.open(t.id)}
-              onmouseleave={() => confirmDelete === t.id && (confirmDelete = null)}
+              onmouseleave={() => confirmDelete === t.id && ((confirmDelete = null), (dirty = null))}
             >
               <span class="state">
                 {#if app.inflight[t.id] && v.waiting}<span class="ask">?</span>
@@ -66,9 +75,10 @@
                 {:else}<span class="idle">·</span>{/if}
               </span>
               <span class="ttitle">{t.title || "New thread"}</span>
+              {#if t.branch}<span class="wtag" title="Own worktree on {t.branch}">⑂</span>{/if}
               <span class="when">{ago(t.updated, now)}</span>
               <button class="del" class:confirm={confirmDelete === t.id} title="Delete thread" onclick={(e) => del(e, t.id)}>
-                {confirmDelete === t.id ? "delete?" : "×"}
+                {dirty === t.id ? "discard changes?" : confirmDelete === t.id ? (t.branch ? "delete + worktree?" : "delete?") : "×"}
               </button>
             </div>
           {/each}
@@ -196,6 +206,9 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .wtag {
+    color: var(--dark-foreground);
   }
   .when {
     color: var(--dark-foreground);

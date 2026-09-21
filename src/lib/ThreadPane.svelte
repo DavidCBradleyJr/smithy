@@ -1,7 +1,9 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import { app } from "./app.svelte";
-  import { api, type Thread } from "./api";
+  import { api, workdir, type Thread } from "./api";
+  import ReviewPanel from "./ReviewPanel.svelte";
+  import Terminal from "./Terminal.svelte";
   import Markdown from "./Markdown.svelte";
   import ToolCall from "./ToolCall.svelte";
   import Permission from "./Permission.svelte";
@@ -15,7 +17,31 @@
   const busy = $derived(!!app.inflight[thread.id]);
   const agent = $derived(app.agents.find((a) => a.id === thread.agent));
   const project = $derived(app.projects.find((p) => p.path === thread.project));
-  const branch = $derived(app.branches[thread.project]);
+  const branch = $derived(thread.branch ?? app.branches[thread.project]);
+  const cwd = $derived(workdir(thread));
+
+  // Changed-file count for the header badge.
+  let changed = $state(0);
+  $effect(() => {
+    const dir = cwd;
+    const tick = async () => (changed = (await api.changes(dir)).files.length);
+    tick();
+    const t = setInterval(tick, busy ? 2000 : 5000);
+    return () => clearInterval(t);
+  });
+
+  let termHeight = $state(260);
+  function drag(e: PointerEvent) {
+    const startY = e.clientY;
+    const start = termHeight;
+    const move = (m: PointerEvent) => (termHeight = Math.min(Math.max(start + startY - m.clientY, 120), window.innerHeight - 220));
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  }
   const lastPending = $derived(
     view.items.findLast((i) => i.kind === "permission" && i.chosen === undefined) as { key: string } | undefined,
   );
@@ -49,6 +75,18 @@
   });
 
   function onkeydown(e: KeyboardEvent) {
+    if (e.ctrlKey && e.key === "`") {
+      e.preventDefault();
+      app.panels.terminal = !app.panels.terminal;
+      return;
+    }
+    if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "g") {
+      e.preventDefault();
+      app.panels.changes = !app.panels.changes;
+      return;
+    }
+    // Esc inside the terminal belongs to the shell, not the agent.
+    if ((e.target as HTMLElement)?.closest?.(".xterm")) return;
     if (e.key === "Escape" && busy) {
       e.preventDefault();
       api.cancel(thread.id);
@@ -60,14 +98,27 @@
 
 <svelte:window {onkeydown} />
 
-<section class="pane">
+<section
+  class="pane"
+  style:grid-template-columns={app.panels.changes ? "minmax(0, 1fr) minmax(360px, 42%)" : "minmax(0, 1fr)"}
+  style:grid-template-rows={app.panels.terminal ? `auto minmax(0, 1fr) auto ${termHeight}px` : "auto minmax(0, 1fr) auto"}
+>
   <header>
     <div class="title">{thread.title || "New thread"}</div>
     <div class="where">
       <span>{project?.name ?? thread.project}</span>
       {#if branch}<span class="branch"> {branch}</span>{/if}
+      {#if thread.branch}<span class="wt" title={thread.cwd}>worktree</span>{/if}
       <span class="sep">·</span>
       <span>{view.agentName ?? agent?.name ?? thread.agent}</span>
+    </div>
+    <div class="toggles">
+      <button class:on={app.panels.changes} title="Review changes (Ctrl+Shift+G)" onclick={() => (app.panels.changes = !app.panels.changes)}>
+        changes{#if changed}<span class="badge">{changed}</span>{/if}
+      </button>
+      <button class:on={app.panels.terminal} title="Terminal (Ctrl+`)" onclick={() => (app.panels.terminal = !app.panels.terminal)}>
+        terminal
+      </button>
     </div>
   </header>
 
@@ -93,7 +144,7 @@
             {#if openThoughts[i] || running}<div class="ttext">{item.text}</div>{/if}
           </div>
         {:else if item.kind === "tool"}
-          <ToolCall tool={item} root={thread.project} {now} />
+          <ToolCall tool={item} root={cwd} {now} />
         {:else if item.kind === "permission"}
           <Permission {...item} active={lastPending?.key === item.key} />
         {:else if item.kind === "plan"}
@@ -130,16 +181,28 @@
   <div class="dock">
     <Composer threadId={thread.id} config={view.config} {busy} onsend={(t) => app.send(thread.id, t)} />
   </div>
+
+  {#if app.panels.terminal}
+    <div class="termrow">
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="grip" onpointerdown={drag} title="Drag to resize"></div>
+      <Terminal id={thread.id} {cwd} />
+    </div>
+  {/if}
+
+  {#if app.panels.changes}
+    <div class="side"><ReviewPanel {thread} {busy} /></div>
+  {/if}
 </section>
 
 <style>
   .pane {
     display: grid;
-    grid-template-rows: auto 1fr auto;
     height: 100%;
     min-width: 0;
   }
   header {
+    grid-column: 1 / -1;
     display: flex;
     align-items: baseline;
     gap: 2ch;
@@ -159,11 +222,56 @@
     white-space: nowrap;
     margin-left: auto;
   }
+  .wt {
+    margin-left: 1ch;
+    color: var(--accent);
+  }
+  .toggles {
+    display: flex;
+    gap: 1.5ch;
+    font-size: 12px;
+  }
+  .toggles button {
+    all: unset;
+    cursor: pointer;
+    color: var(--dark-foreground);
+  }
+  .toggles button:hover,
+  .toggles button.on {
+    color: var(--accent);
+  }
+  .badge {
+    margin-left: 0.6ch;
+    color: var(--yellow);
+  }
+  .side {
+    grid-column: 2;
+    grid-row: 2 / -1;
+    min-height: 0;
+  }
+  .termrow {
+    grid-column: 1;
+    position: relative;
+    min-height: 0;
+  }
+  .grip {
+    position: absolute;
+    top: -3px;
+    left: 0;
+    right: 0;
+    height: 6px;
+    cursor: ns-resize;
+    z-index: 2;
+  }
   .branch {
     color: var(--light-foreground);
   }
   .sep {
     margin: 0 0.5ch;
+  }
+  .scroll,
+  .dock {
+    grid-column: 1;
   }
   .scroll {
     overflow-y: auto;

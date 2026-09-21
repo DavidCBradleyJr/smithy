@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <rect width="1024" height="1024" rx="96" fill="#101217"/>
+  <!-- anvil -->
+  <path fill="#d9dde3" d="M150 398 L300 380 H830 V470 H705 L645 560 L705 640 H790 V712 H320 V640 H405 L465 560 L405 470 H330 Q235 452 150 398 Z"/>
+  <!-- hot working face -->
+  <rect x="300" y="380" width="530" height="22" fill="#ff7a1a"/>
+  <!-- spark -->
+  <path fill="#ff7a1a" d="M640 170 L660 250 L740 270 L660 290 L640 370 L620 290 L540 270 L620 250 Z"/>
+  <path fill="#ffb066" d="M770 300 L778 330 L808 338 L778 346 L770 376 L762 346 L732 338 L762 330 Z"/>
+</svg>

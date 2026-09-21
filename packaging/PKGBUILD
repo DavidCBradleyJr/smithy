@@ -1,0 +1,48 @@
+# Maintainer: David Bradley <dbradley978 at gmail dot com>
+pkgname=smithy
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Local-first coding agent workbench for Omarchy: local models and ACP agents in one window"
+arch=('x86_64')
+url="https://github.com/DavidCBradleyJr/smithy"
+license=('MIT')
+depends=('webkit2gtk-4.1' 'gtk3' 'libsoup3' 'git' 'nodejs' 'npm')
+makedepends=('cargo' 'npm')
+optdepends=(
+  'llama.cpp: local models (any build with router mode, or a fork such as PrismML for Bonsai)'
+  'libnotify: desktop notifications when an agent finishes or needs approval'
+)
+options=('!lto')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+prepare() {
+  cd "$pkgname-$pkgver"
+  npm ci --no-audit --no-fund
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --manifest-path src-tauri/Cargo.toml --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  npm run tauri build -- --no-bundle
+}
+
+check() {
+  cd "$pkgname-$pkgver"
+  npm test
+  cargo test --frozen --manifest-path src-tauri/Cargo.toml
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  install -Dm755 src-tauri/target/release/smithy "$pkgdir/usr/bin/smithy"
+  install -Dm644 packaging/smithy.desktop "$pkgdir/usr/share/applications/smithy.desktop"
+  install -Dm644 packaging/icon.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/smithy.svg"
+  for size in 32 64 128; do
+    install -Dm644 "src-tauri/icons/${size}x${size}.png" "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps/smithy.png"
+  done
+  install -Dm644 src-tauri/icons/128x128@2x.png "$pkgdir/usr/share/icons/hicolor/256x256/apps/smithy.png"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

@@ -27,6 +27,12 @@ pub struct Thread {
     pub session_id: Option<String>,
     #[serde(default)]
     pub title: String,
+    /// Where the agent works. `None` means the project folder itself; a path
+    /// means a git worktree of it on `branch`.
+    #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub branch: Option<String>,
     pub created: u64,
     pub updated: u64,
 }
@@ -62,6 +68,13 @@ fn state_file(dir: &Path) -> PathBuf {
 
 pub fn transcript_file(dir: &Path, thread: &str) -> PathBuf {
     dir.join("threads").join(format!("{thread}.jsonl"))
+}
+
+impl Thread {
+    /// The folder the agent, terminal and review panel work in.
+    pub fn workdir(&self) -> &str {
+        self.cwd.as_deref().unwrap_or(&self.project)
+    }
 }
 
 impl State {

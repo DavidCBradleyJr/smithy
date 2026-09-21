@@ -159,7 +159,7 @@ async fn ensure_live<R: Runtime>(app: &AppHandle<R>, thread_id: &str) -> Result<
     let replaying = Arc::new(AtomicBool::new(false));
     let conn = {
         let (app, tid, cell, replaying) = (app.clone(), thread_id.to_string(), cell.clone(), replaying.clone());
-        Conn::spawn(&registry::argv(&def), Path::new(&t.project), log, move |m| {
+        Conn::spawn(&registry::argv(&def), Path::new(t.workdir()), log, move |m| {
             handle_incoming(&app, &tid, &cell, &replaying, m)
         })?
     };
@@ -176,7 +176,7 @@ async fn ensure_live<R: Runtime>(app: &AppHandle<R>, thread_id: &str) -> Result<
         )
         .await?;
     let can_load = init["agentCapabilities"]["loadSession"].as_bool().unwrap_or(false);
-    let base = json!({ "cwd": t.project, "mcpServers": [] });
+    let base = json!({ "cwd": t.workdir(), "mcpServers": [] });
 
     let (session_id, mut config, resumed) = match t.session_id.clone().filter(|_| can_load) {
         Some(sid) => {
@@ -318,10 +318,22 @@ pub fn thread_live(mgr: tauri::State<Manager>) -> Vec<String> {
 }
 
 #[tauri::command]
-pub async fn thread_create<R: Runtime>(app: AppHandle<R>, project: String, agent: String) -> Result<Thread, String> {
+pub async fn thread_create<R: Runtime>(
+    app: AppHandle<R>,
+    project: String,
+    agent: String,
+    worktree: bool,
+) -> Result<Thread, String> {
     let mgr = app.state::<Manager>();
     let now = store::now();
-    let t = Thread { id: store::new_id(), project, agent, session_id: None, title: String::new(), created: now, updated: now };
+    let id = store::new_id();
+    let (branch, cwd) = if worktree {
+        let (b, p) = crate::git::worktree_add(&project, &id).await?;
+        (Some(b), Some(p))
+    } else {
+        (None, None)
+    };
+    let t = Thread { id, project, agent, session_id: None, title: String::new(), cwd, branch, created: now, updated: now };
     mgr.state.lock().unwrap().threads.push(t.clone());
     mgr.save()?;
     // Start the agent now so the composer can show its models straight away.
@@ -337,9 +349,17 @@ pub fn thread_history(mgr: tauri::State<Manager>, id: String) -> Vec<Value> {
     store::history(&mgr.dir, &id)
 }
 
+/// Deletes a thread. A worktree with uncommitted changes is kept (and the
+/// thread with it) unless `force`; its branch is only deleted once merged.
 #[tauri::command]
-pub fn thread_delete(mgr: tauri::State<Manager>, id: String) -> Result<(), String> {
+pub async fn thread_delete<R: Runtime>(app: AppHandle<R>, id: String, force: bool) -> Result<(), String> {
+    let mgr = app.state::<Manager>();
+    let t = mgr.thread(&id)?;
     mgr.live.lock().unwrap().remove(&id);
+    if let (Some(cwd), Some(branch)) = (&t.cwd, &t.branch) {
+        crate::git::worktree_remove(&t.project, cwd, branch, force).await?;
+    }
+    app.state::<crate::pty::Ptys>().close(&id);
     mgr.state.lock().unwrap().threads.retain(|t| t.id != id);
     let _ = std::fs::remove_file(store::transcript_file(&mgr.dir, &id));
     mgr.save()
@@ -459,7 +479,7 @@ mod tests {
         app.manage(Manager::with_dir(dir.join("data")));
         let h = app.handle().clone();
         project_add(h.state(), proj.to_string_lossy().into()).unwrap();
-        let t = thread_create(h.clone(), proj.to_string_lossy().into(), "pi".into()).await.unwrap();
+        let t = thread_create(h.clone(), proj.to_string_lossy().into(), "pi".into(), false).await.unwrap();
         let reason = thread_prompt(
             h.clone(),
             t.id.clone(),
@@ -527,7 +547,7 @@ mod tests {
         let h = app.handle().clone();
 
         let before = crate::local::state().await.loaded.map(|l| l.id);
-        let t = thread_create(h.clone(), proj.to_string_lossy().into(), "pi".into()).await.unwrap();
+        let t = thread_create(h.clone(), proj.to_string_lossy().into(), "pi".into(), false).await.unwrap();
         let model_of = |hist: &[Value]| -> String {
             hist.iter()
                 .rev()
@@ -562,6 +582,108 @@ mod tests {
             assert_eq!(loaded, vec![id.to_string()]);
             assert_eq!(model_of(&hist), format!("local/{id}"));
             assert!(reply.to_lowercase().contains("ready"));
+        }
+        app.state::<Manager>().shutdown();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The whole review loop through the real commands, with Pi on the loaded
+    /// local model: worktree thread → edit → review comment → revise → commit →
+    /// merge → delete. `cargo test live_review -- --ignored --nocapture`.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
+    async fn live_review() {
+        use crate::git;
+        let dir = std::env::temp_dir().join(format!("smithy-review-{}", store::new_id()));
+        let proj = dir.join("proj");
+        std::fs::create_dir_all(&proj).unwrap();
+        let p = proj.to_string_lossy().into_owned();
+        let sh = |args: &[&str]| {
+            assert!(std::process::Command::new("git").arg("-C").arg(&p).args(args).status().unwrap().success());
+        };
+        sh(&["init", "-q", "-b", "main"]);
+        sh(&["config", "user.email", "t@t"]);
+        sh(&["config", "user.name", "t"]);
+        std::fs::write(proj.join("greet.py"), "def greet(name):\n    return 'hi ' + name\n").unwrap();
+        sh(&["add", "-A"]);
+        sh(&["commit", "-qm", "init"]);
+
+        let app = tauri::test::mock_app();
+        app.manage(Manager::with_dir(dir.join("data")));
+        app.manage(crate::pty::Ptys::default());
+        let h = app.handle().clone();
+        let t = thread_create(h.clone(), p.clone(), "pi".into(), true).await.unwrap();
+        let wt = t.cwd.clone().expect("worktree thread has its own folder");
+        let branch = t.branch.clone().unwrap();
+        println!("worktree {wt} on {branch}");
+        assert_ne!(wt, p);
+
+        let started = std::time::Instant::now();
+        thread_prompt(
+            h.clone(),
+            t.id.clone(),
+            "In greet.py, make greet return 'hello ' + name instead of 'hi '. Edit the file; don't run anything.".into(),
+        )
+        .await
+        .unwrap();
+        let c = git::git_changes(wt.clone()).await;
+        println!("after edit ({:.0}s): {:?}", started.elapsed().as_secs_f32(), c.files.iter().map(|f| (&f.path, &f.status, f.additions, f.deletions)).collect::<Vec<_>>());
+        assert_eq!(c.files.len(), 1);
+        assert!(std::fs::read_to_string(proj.join("greet.py")).unwrap().contains("'hi '"), "main checkout untouched");
+        let d = git::git_file_diff(wt.clone(), "greet.py".into(), None).await.unwrap();
+        assert!(d.new.as_deref().unwrap().contains("hello"));
+
+        // What the review panel sends for a comment on line 2.
+        let review = "I reviewed your changes. Please address these comments:\n\ngreet.py\n- line 2: `return 'hello ' + name`\n  Use an f-string here instead of concatenation.";
+        thread_prompt(h.clone(), t.id.clone(), review.into()).await.unwrap();
+        let now = std::fs::read_to_string(std::path::Path::new(&wt).join("greet.py")).unwrap();
+        println!("after review ({:.0}s):\n{now}", started.elapsed().as_secs_f32());
+        assert!(now.contains("f\"hello {name}\"") || now.contains("f'hello {name}'"), "{now}");
+
+        let sha = git::git_commit(wt.clone(), "greet with hello".into()).await.unwrap();
+        let into = git::git_merge(p.clone(), branch.clone()).await.unwrap();
+        println!("committed {sha}, merged into {into}");
+        assert!(std::fs::read_to_string(proj.join("greet.py")).unwrap().contains("hello {name}"));
+
+        thread_delete(h.clone(), t.id.clone(), false).await.unwrap();
+        assert!(!std::path::Path::new(&wt).exists(), "worktree removed");
+        let branches = String::from_utf8(std::process::Command::new("git").arg("-C").arg(&p).args(["branch", "--list", &branch]).output().unwrap().stdout).unwrap();
+        assert!(branches.trim().is_empty(), "merged branch deleted");
+        app.state::<Manager>().shutdown();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Starts a session with every installed agent without prompting, so no
+    /// subscription usage: `cargo test live_agents -- --ignored --nocapture`.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
+    async fn live_agents() {
+        let dir = std::env::temp_dir().join(format!("smithy-agents-{}", store::new_id()));
+        let proj = dir.join("proj");
+        std::fs::create_dir_all(&proj).unwrap();
+        let app = tauri::test::mock_app();
+        app.manage(Manager::with_dir(dir.join("data")));
+        app.manage(crate::pty::Ptys::default());
+        let h = app.handle().clone();
+        for a in registry::all().into_iter().filter(|a| a.available) {
+            let started = std::time::Instant::now();
+            let t = thread_create(h.clone(), proj.to_string_lossy().into(), a.id.into(), false).await.unwrap();
+            let hist = thread_history(h.state(), t.id.clone());
+            let session = hist.iter().find(|e| e["t"] == "session");
+            let err = hist.iter().find(|e| e["t"] == "error").map(|e| e["message"].to_string());
+            let config: Vec<String> = session
+                .and_then(|s| s["configOptions"].as_array().cloned())
+                .unwrap_or_default()
+                .iter()
+                .map(|o| format!("{}={} ({} options)", o["id"].as_str().unwrap_or("?"), o["currentValue"].as_str().unwrap_or("?"), o["options"].as_array().map_or(0, |v| v.len())))
+                .collect();
+            println!(
+                "{:<9} {:>5.1}s agent={} config={config:?} error={err:?}",
+                a.id,
+                started.elapsed().as_secs_f32(),
+                session.map(|s| s["agentInfo"]["name"].to_string()).unwrap_or_default(),
+            );
+            thread_delete(h.clone(), t.id.clone(), false).await.unwrap();
         }
         app.state::<Manager>().shutdown();
         let _ = std::fs::remove_dir_all(dir);

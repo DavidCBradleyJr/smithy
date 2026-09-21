@@ -9,13 +9,15 @@
   let starting = $state<string | null>(null);
   let error = $state("");
   let confirmRemove = $state(false);
+  const isRepo = $derived(!!app.branches[project]);
+  let worktree = $state(false);
 
   async function start(id: string) {
     if (starting) return;
     starting = id;
     error = "";
     try {
-      await app.newThread(project, id);
+      await app.newThread(project, id, worktree && isRepo);
     } catch (e) {
       error = String(e);
     } finally {
@@ -25,6 +27,10 @@
 
   function onkeydown(e: KeyboardEvent) {
     if (e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement) return;
+    if (e.key === "w" && isRepo) {
+      worktree = !worktree;
+      return;
+    }
     const n = Number(e.key);
     const a = agents.filter((x) => x.available)[n - 1];
     if (a) start(a.id);
@@ -39,6 +45,19 @@
     <h1>{p?.name ?? project}</h1>
     <div class="path">{project}</div>
   </div>
+
+  {#if isRepo}
+    <label class="wt">
+      <input type="checkbox" bind:checked={worktree} />
+      <span>
+        <b>separate worktree</b> <kbd>w</kbd>
+        <span class="dim"
+          >The agent works on its own branch (<code>smithy/…</code>) in its own folder, so it can't disturb your checkout
+          or other threads. Merge it back from the changes panel.</span
+        >
+      </span>
+    </label>
+  {/if}
 
   <div class="k">agent</div>
   <div class="list">
@@ -131,6 +150,23 @@
   }
   code {
     color: var(--accent);
+  }
+  .wt {
+    display: flex;
+    gap: 1.5ch;
+    align-items: baseline;
+    margin: -12px 0 28px;
+    cursor: pointer;
+    max-width: 620px;
+  }
+  .wt input {
+    accent-color: var(--accent);
+  }
+  .wt .dim {
+    display: block;
+    color: var(--dark-foreground);
+    font-size: 12px;
+    margin-top: 2px;
   }
   .error {
     margin-top: 12px;

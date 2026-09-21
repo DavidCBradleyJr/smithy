@@ -54,8 +54,39 @@ export interface Thread {
   agent: string;
   session_id: string | null;
   title: string;
+  /** Git worktree folder, when the thread has its own. */
+  cwd: string | null;
+  branch: string | null;
   created: number;
   updated: number;
+}
+
+export function workdir(t: Thread) {
+  return t.cwd ?? t.project;
+}
+
+export interface FileChange {
+  path: string;
+  status: "M" | "A" | "D" | "R" | "?" | "U";
+  orig: string | null;
+  additions: number | null;
+  deletions: number | null;
+}
+
+export interface Changes {
+  repo: boolean;
+  branch: string | null;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  files: FileChange[];
+}
+
+export interface FileDiff {
+  old: string | null;
+  new: string | null;
+  binary: boolean;
+  too_large: boolean;
 }
 
 export interface Settings {
@@ -105,12 +136,24 @@ export const api = {
 
   threads: () => invoke<Thread[]>("threads_list"),
   live: () => invoke<string[]>("thread_live"),
-  createThread: (project: string, agent: string) => invoke<Thread>("thread_create", { project, agent }),
+  createThread: (project: string, agent: string, worktree: boolean) =>
+    invoke<Thread>("thread_create", { project, agent, worktree }),
   history: (id: string) => invoke<RawEvent[]>("thread_history", { id }),
-  deleteThread: (id: string) => invoke<void>("thread_delete", { id }),
+  deleteThread: (id: string, force = false) => invoke<void>("thread_delete", { id, force }),
   prompt: (id: string, text: string) => invoke<string>("thread_prompt", { id, text }),
   cancel: (id: string) => invoke<void>("thread_cancel", { id }),
   setConfig: (id: string, configId: string, value: string) =>
     invoke<ConfigOption[]>("thread_set_config", { id, configId, value }),
   respond: (key: string, optionId: string | null) => invoke<void>("permission_respond", { key, optionId }),
+
+  changes: (cwd: string) => invoke<Changes>("git_changes", { cwd }),
+  fileDiff: (cwd: string, path: string, orig: string | null) => invoke<FileDiff>("git_file_diff", { cwd, path, orig }),
+  commit: (cwd: string, message: string) => invoke<string>("git_commit", { cwd, message }),
+  push: (cwd: string) => invoke<string>("git_push", { cwd }),
+  merge: (project: string, branch: string) => invoke<string>("git_merge", { project, branch }),
+
+  ptyOpen: (id: string, cwd: string, cols: number, rows: number) => invoke<string>("pty_open", { id, cwd, cols, rows }),
+  ptyWrite: (id: string, data: string) => invoke<void>("pty_write", { id, data }),
+  ptyResize: (id: string, cols: number, rows: number) => invoke<void>("pty_resize", { id, cols, rows }),
+  ptyClose: (id: string) => invoke<void>("pty_close", { id }),
 };

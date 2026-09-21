@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Smithy
+GenericName=Coding Agent Workbench
+Comment=Run local models and coding agents in one window
+Exec=smithy
+Icon=smithy
+Terminal=false
+Categories=Development;IDE;
+Keywords=ai;agent;llm;llama;pi;opencode;claude;codex;
+StartupWMClass=smithy

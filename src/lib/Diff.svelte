@@ -1,8 +1,27 @@
 <script lang="ts">
   import { diffLines } from "diff";
   import type { DiffBlock } from "./reduce";
+  import type { ReviewComment } from "./app.svelte";
 
-  let { diff, root = "" }: { diff: DiffBlock; root?: string } = $props();
+  let {
+    diff,
+    root = "",
+    comments,
+    oncomment,
+    onremove,
+    header = true,
+  }: {
+    diff: DiffBlock;
+    root?: string;
+    /** When given, lines can be commented on (the review panel). */
+    comments?: ReviewComment[];
+    oncomment?: (c: ReviewComment) => void;
+    onremove?: (c: ReviewComment) => void;
+    header?: boolean;
+  } = $props();
+
+  let editing = $state<number | null>(null);
+  let draft = $state("");
 
   interface Row {
     sign: " " | "+" | "-" | "…";
@@ -44,23 +63,85 @@
     del: rows.filter((r) => r.sign === "-").length,
   });
   const shortPath = $derived(root && diff.path.startsWith(root + "/") ? diff.path.slice(root.length + 1) : diff.path);
+
+  function anchor(r: Row): { line: number; side: "new" | "old" } | null {
+    if (r.newNo != null) return { line: r.newNo, side: "new" };
+    if (r.oldNo != null) return { line: r.oldNo, side: "old" };
+    return null;
+  }
+
+  function commentsAt(r: Row) {
+    const a = anchor(r);
+    return a && comments ? comments.filter((c) => c.path === shortPath && c.line === a.line && c.side === a.side) : [];
+  }
+
+  function save(r: Row) {
+    const a = anchor(r);
+    if (a && draft.trim() && oncomment) oncomment({ path: shortPath, ...a, code: r.text, text: draft.trim() });
+    editing = null;
+    draft = "";
+  }
+
+  function keys(e: KeyboardEvent, r: Row) {
+    if (e.key === "Enter" && (e.ctrlKey || !e.shiftKey)) {
+      e.preventDefault();
+      save(r);
+    } else if (e.key === "Escape") {
+      e.stopPropagation();
+      editing = null;
+    }
+  }
+
+  function focus(node: HTMLTextAreaElement) {
+    node.focus();
+  }
 </script>
 
-<div class="diff">
+<div class="diff" class:commentable={!!oncomment}>
+  {#if header}
   <div class="head">
     <span class="path">{shortPath}</span>
     {#if diff.oldText == null}<span class="new">new file</span>{/if}
     <span class="add">+{stats.add}</span>
     <span class="del">−{stats.del}</span>
   </div>
+  {/if}
   <div class="body">
-    {#each rows as r}
+    {#each rows as r, i}
       <div class="row {r.sign === '+' ? 'plus' : r.sign === '-' ? 'minus' : r.sign === '…' ? 'gap' : ''}">
         <span class="no">{r.oldNo ?? ""}</span>
         <span class="no">{r.newNo ?? ""}</span>
-        <span class="sign">{r.sign === "…" ? "" : r.sign}</span>
+        {#if oncomment && r.sign !== "…"}
+          <button class="sign add" title="Comment on this line" onclick={() => ((editing = i), (draft = ""))}>
+            <span class="plus-mark">+</span><span class="s">{r.sign}</span>
+          </button>
+        {:else}
+          <span class="sign">{r.sign === "…" ? "" : r.sign}</span>
+        {/if}
         <span class="code">{r.text}</span>
       </div>
+      {#each commentsAt(r) as c}
+        <div class="note">
+          <span class="who">you</span>
+          <span class="ntext">{c.text}</span>
+          {#if onremove}<button class="x" title="Remove comment" onclick={() => onremove(c)}>×</button>{/if}
+        </div>
+      {/each}
+      {#if editing === i}
+        <div class="editor">
+          <textarea
+            bind:value={draft}
+            use:focus
+            rows="2"
+            placeholder="Comment for the agent. Enter saves, Esc cancels."
+            onkeydown={(e) => keys(e, r)}
+          ></textarea>
+          <div class="eb">
+            <button class="primary" onclick={() => save(r)}>add comment</button>
+            <button onclick={() => (editing = null)}>cancel</button>
+          </div>
+        </div>
+      {/if}
     {/each}
   </div>
 </div>
@@ -126,6 +207,74 @@
   .minus .sign,
   .minus .code {
     color: color-mix(in srgb, var(--red) 70%, var(--foreground));
+  }
+  button.sign {
+    all: unset;
+    cursor: pointer;
+    padding-left: 0.5ch;
+    position: relative;
+  }
+  .plus-mark {
+    display: none;
+    position: absolute;
+    left: 0.1ch;
+    color: var(--background);
+    background: var(--accent);
+    width: 1.6ch;
+    text-align: center;
+    font-weight: 700;
+  }
+  .row:hover .plus-mark {
+    display: inline-block;
+  }
+  .note,
+  .editor {
+    margin: 2px 8px 6px 9ch;
+    font-family: inherit;
+    white-space: normal;
+  }
+  .note {
+    display: flex;
+    gap: 1ch;
+    padding: 5px 10px;
+    border-left: 2px solid var(--accent);
+    background: var(--dark-background);
+    color: var(--foreground);
+  }
+  .who {
+    color: var(--accent);
+    flex: none;
+  }
+  .ntext {
+    flex: 1;
+    white-space: pre-wrap;
+  }
+  .x {
+    all: unset;
+    cursor: pointer;
+    color: var(--dark-foreground);
+  }
+  .x:hover {
+    color: var(--red);
+  }
+  .editor textarea {
+    display: block;
+    width: 100%;
+    font: inherit;
+    color: var(--foreground);
+    background: var(--dark-background);
+    border: 1px solid var(--accent);
+    padding: 6px 8px;
+    resize: vertical;
+    outline: 0;
+  }
+  .eb {
+    display: flex;
+    gap: 8px;
+    margin-top: 6px;
+  }
+  .commentable .body {
+    max-height: none;
   }
   .gap {
     color: var(--dark-foreground);
