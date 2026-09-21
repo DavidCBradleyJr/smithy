@@ -14,12 +14,27 @@ things, with diffs and tool output inline.
 - **Any agent over ACP.** Threads talk to agents over the
   [Agent Client Protocol](https://agentclientprotocol.com): Pi for local models, and
   OpenCode, Claude Code or Codex on their own subscriptions.
+- **Review like a pull request.** The changes panel (`Ctrl+Shift+G`) shows every
+  changed file. Click any line to leave a comment, then send all your comments to the
+  agent as one message. Commit, push, and merge from the same panel.
+- **Worktrees per thread.** A thread can work on its own branch in its own folder, so
+  parallel agents never trip over each other or your checkout.
+- **A terminal per thread** (``Ctrl+` ``) in the thread's folder, themed to match.
 - **Omarchy-native.** Colors follow your current Omarchy theme live, in your
-  terminal font.
+  terminal font. Desktop notifications when an agent finishes or needs approval.
 
-Status: early. Chat, threads, tool calls, diffs, permission prompts, session resume
-and local model switching work. Diff review with comments, an integrated terminal,
-git worktrees and a bar widget are next.
+Status: early but usable. A bar widget for omarchy-shell is next.
+
+## Install
+
+Arch / Omarchy: build the package in `packaging/`:
+
+```bash
+cd packaging && makepkg -si
+```
+
+It installs `smithy`, a desktop entry and icons. You also need a `llama-server` with
+router mode for local models, and the CLIs of the agents you want.
 
 ## Requirements
 
@@ -27,6 +42,17 @@ git worktrees and a bar widget are next.
 - A `llama-server` build with router mode (`--models-dir`)
 - Node 22+ and `npx` (agent adapters run through it)
 - The agent CLIs you want to use: `pi`, `opencode`, `claude`, `codex`
+
+## Keys
+
+| | |
+|---|---|
+| `Enter` / `Shift+Enter` | send / new line |
+| `Esc` | stop the agent |
+| `Ctrl+N` | new thread |
+| `Ctrl+Shift+G` | changes panel |
+| ``Ctrl+` `` | terminal |
+| `1`–`9` | answer a permission prompt, or pick an agent |
 
 ## Develop
 
@@ -50,6 +76,7 @@ cargo test -- --ignored --nocapture   # live tests against a running local model
 | Settings | `~/.config/smithy/settings.json` |
 | Per-model presets (context, sampling) | `~/.config/smithy/models.ini` |
 | Threads and transcripts | `~/.local/share/smithy/` |
+| Thread worktrees | `~/.local/share/smithy/worktrees/` |
 | Logs | `~/.local/state/smithy/logs/` |
 
 Smithy also maintains one provider, `local`, in Pi's `~/.pi/agent/models.json` so
