@@ -1,0 +1,62 @@
+/* Fallbacks only; the live Omarchy theme overrides these at runtime. */
+:root {
+  --background: #1a1b26;
+  --dark-background: #16161e;
+  --darker-background: #111118;
+  --lighter-background: #24283b;
+  --foreground: #c0caf5;
+  --dark-foreground: #565f89;
+  --light-foreground: #a9b1d6;
+  --accent: #7aa2f7;
+  --selection: #283457;
+  --muted: #3b4261;
+  --red: #f7768e;
+  --green: #9ece6a;
+  --yellow: #e0af68;
+
+  --font: "JetBrainsMono Nerd Font", "JetBrains Mono", ui-monospace, monospace;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--background);
+  color: var(--foreground);
+  font: 13px/1.5 var(--font);
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font: inherit;
+  color: var(--foreground);
+  background: transparent;
+  border: 1px solid var(--muted);
+  padding: 4px 12px;
+  cursor: pointer;
+}
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+button.primary {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+button.danger:hover:not(:disabled) {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+::selection {
+  background: var(--selection);
+}
