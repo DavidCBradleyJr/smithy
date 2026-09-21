@@ -1,5 +1,6 @@
 mod agents;
 mod git;
+mod gguf;
 mod local;
 mod pty;
 mod runtime;

@@ -71,6 +71,12 @@ export interface RawEvent {
   [k: string]: any;
 }
 
+/** Pi's own retry chatter, sent as if it were the answer. */
+export function isRetryNotice(text: string) {
+  const t = text.trim();
+  return (t.startsWith("Retrying (attempt ") && t.endsWith("...")) || t === "Retry finished, resuming.";
+}
+
 function contentText(c: any): string {
   if (!c) return "";
   if (c.type === "text") return c.text ?? "";
@@ -165,6 +171,13 @@ export function reduce(events: RawEvent[]): ThreadView {
           case "agent_message_chunk": {
             closeThought(at);
             const text = contentText(u.content);
+            if (isRetryNotice(text)) {
+              const l = last();
+              const note = `Model request failed; ${text.trim().replace(/^Retrying/, "retrying").replace(/\.\.\.$/, "…")}`;
+              if (l?.kind === "note" && l.text.startsWith("Model request failed")) l.text = note;
+              else items.push({ kind: "note", text: note });
+              break;
+            }
             const l = last();
             if (l?.kind === "text") l.text += text;
             else if (text) items.push({ kind: "text", text });

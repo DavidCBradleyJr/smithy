@@ -375,9 +375,66 @@ pub async fn thread_delete<R: Runtime>(app: AppHandle<R>, id: String, force: boo
     mgr.save()
 }
 
+/// Pi retries a failing model request and then ends the turn quietly, with
+/// only "Retrying…" messages to show for it.
+pub fn is_retry_notice(text: &str) -> bool {
+    let t = text.trim();
+    (t.starts_with("Retrying (attempt ") && t.ends_with("...")) || t == "Retry finished, resuming."
+}
+
+/// The last error llama-server logged, from lines like
+/// `... got exception: {"error":{"code":500,"message":"...Error: Jinja Exception: ..."}}`.
+pub fn router_error(log: &str) -> Option<String> {
+    let line = log.lines().rev().find(|l| l.contains("got exception: "))?;
+    let json = &line[line.find("got exception: ")? + "got exception: ".len()..];
+    let msg = serde_json::from_str::<Value>(json).ok()?["error"]["message"].as_str()?.to_string();
+    let msg = msg.rsplit("Error: ").next().unwrap_or(&msg).trim().to_string();
+    Some(msg)
+}
+
+fn router_log_len() -> u64 {
+    crate::runtime::process::log_path("local-router").and_then(|p| std::fs::metadata(p).ok()).map(|m| m.len()).unwrap_or(0)
+}
+
+fn router_log_since(offset: u64) -> String {
+    use std::io::{Read, Seek};
+    let Some(path) = crate::runtime::process::log_path("local-router") else { return String::new() };
+    let Ok(mut f) = std::fs::File::open(path) else { return String::new() };
+    let mut s = String::new();
+    if f.seek(std::io::SeekFrom::Start(offset)).is_ok() {
+        let _ = f.take(1 << 20).read_to_string(&mut s);
+    }
+    s
+}
+
+/// After a turn that produced nothing but retry notices, explain why.
+fn explain_empty_turn<R: Runtime>(app: &AppHandle<R>, mgr: &Manager, id: &str, log_offset: u64) {
+    let hist = store::history(&mgr.dir, id);
+    let Some(start) = hist.iter().rposition(|e| e["t"] == "user") else { return };
+    let turn = &hist[start + 1..];
+    let produced = turn.iter().any(|e| {
+        let u = &e["update"];
+        match u["sessionUpdate"].as_str() {
+            Some("agent_message_chunk") => u["content"]["text"].as_str().is_some_and(|t| !t.trim().is_empty() && !is_retry_notice(t)),
+            Some("tool_call") => true,
+            _ => false,
+        }
+    });
+    let retried = turn.iter().any(|e| e["update"]["content"]["text"].as_str().is_some_and(is_retry_notice));
+    if produced || !retried {
+        return;
+    }
+    let message = match router_error(&router_log_since(log_offset)) {
+        Some(e) => format!("The local model rejected the request: {e}"),
+        None => "The model request failed, and the agent gave up after retrying. Check the local server log.".into(),
+    };
+    mgr.record(app, id, json!({ "t": "error", "message": message }));
+}
+
 #[tauri::command]
 pub async fn thread_prompt<R: Runtime>(app: AppHandle<R>, id: String, text: String) -> Result<String, String> {
     let mgr = app.state::<Manager>();
+    let log_offset = router_log_len();
     mgr.record(&app, &id, json!({ "t": "user", "text": text }));
     mgr.touch(&id, Some(&text));
     let result = async {
@@ -394,6 +451,7 @@ pub async fn thread_prompt<R: Runtime>(app: AppHandle<R>, id: String, text: Stri
     match result {
         Ok(r) => {
             let reason = r["stopReason"].as_str().unwrap_or("end_turn").to_string();
+            explain_empty_turn(&app, &mgr, &id, log_offset);
             mgr.record(&app, &id, json!({ "t": "stop", "reason": reason }));
             if !app.get_webview_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(false) {
                 notify_desktop("Smithy: agent finished", &mgr.thread(&id).map(|t| t.title).unwrap_or_default());
@@ -460,6 +518,19 @@ pub fn permission_respond<R: Runtime>(app: AppHandle<R>, key: String, option_id:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recognises_pi_retries_and_router_errors() {
+        assert!(is_retry_notice("Retrying (attempt 2/3, waiting 4s)..."));
+        assert!(is_retry_notice("Retry finished, resuming."));
+        assert!(!is_retry_notice("Retrying is a word I might use in an answer."));
+        let log = "265.10 I srv proxy\n[50179] 265.17 W srv    operator(): got exception: {\"error\":{\"code\":500,\"message\":\"\\n---\\nError: Jinja Exception: Unexpected reasoning effort high. Supported types are xhigh (default), medium, and low.\",\"type\":\"server_error\"}}\n";
+        assert_eq!(
+            router_error(log).as_deref(),
+            Some("Jinja Exception: Unexpected reasoning effort high. Supported types are xhigh (default), medium, and low.")
+        );
+        assert_eq!(router_error("all fine\n"), None);
+    }
 
     #[test]
     fn prefs_apply_only_when_offered_and_different() {
@@ -695,6 +766,35 @@ mod tests {
             );
             thread_delete(h.clone(), t.id.clone(), false).await.unwrap();
         }
+        app.state::<Manager>().shutdown();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The case that used to fail: Bonsai with thinking "high", which its
+    /// template rejects. `cargo test live_thinking -- --ignored --nocapture`.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
+    async fn live_thinking() {
+        let dir = std::env::temp_dir().join(format!("smithy-think-{}", store::new_id()));
+        let proj = dir.join("proj");
+        std::fs::create_dir_all(&proj).unwrap();
+        let app = tauri::test::mock_app();
+        app.manage(Manager::with_dir(dir.join("data")));
+        app.manage(crate::pty::Ptys::default());
+        let h = app.handle().clone();
+        let t = thread_create(h.clone(), proj.to_string_lossy().into(), "pi".into(), false).await.unwrap();
+        let cfg = thread_set_config(h.clone(), t.id.clone(), "thought_level".into(), "high".into()).await.unwrap();
+        let level = cfg.as_array().unwrap().iter().find(|o| o["id"] == "thought_level").unwrap()["currentValue"].clone();
+        let n = thread_history(h.state(), t.id.clone()).len();
+        thread_prompt(h.clone(), t.id.clone(), "who are you? one sentence.".into()).await.unwrap();
+        let hist = thread_history(h.state(), t.id.clone());
+        let reply: String = hist[n..].iter().filter(|e| e["update"]["sessionUpdate"] == "agent_message_chunk").filter_map(|e| e["update"]["content"]["text"].as_str()).collect();
+        let errors: Vec<_> = hist[n..].iter().filter(|e| e["t"] == "error").map(|e| e["message"].to_string()).collect();
+        println!("asked high → pi uses {level}; reply={:?}; errors={errors:?}", reply.lines().last().unwrap_or(""));
+        assert!(errors.is_empty());
+        assert!(!reply.lines().last().unwrap_or("").starts_with("Retry"));
+        // Don't leave "high" as this machine's saved Pi preference.
+        app.state::<Manager>().state.lock().unwrap().prefs.clear();
         app.state::<Manager>().shutdown();
         let _ = std::fs::remove_dir_all(dir);
     }

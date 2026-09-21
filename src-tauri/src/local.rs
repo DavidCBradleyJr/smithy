@@ -31,6 +31,9 @@ pub struct LocalModel {
     /// The configured folder it was found in.
     #[serde(default)]
     pub folder: String,
+    /// Reasoning efforts its chat template accepts; `None` if unrestricted.
+    #[serde(default)]
+    pub efforts: Option<Vec<String>>,
 }
 
 fn is_gguf(p: &Path) -> bool {
@@ -62,6 +65,7 @@ pub fn scan(dir: &Path) -> Vec<LocalModel> {
                     status: "unloaded".into(),
                     ctx: None,
                     folder: String::new(),
+                    efforts: None,
                 });
             }
             if !path.is_dir() {
@@ -80,6 +84,7 @@ pub fn scan(dir: &Path) -> Vec<LocalModel> {
                 status: "unloaded".into(),
                 ctx: None,
                 folder: String::new(),
+                efforts: None,
             })
         })
         .collect();
@@ -292,6 +297,7 @@ pub async fn state() -> LocalState {
     let mut scanned = scan_all(&s.model_dirs);
     for m in &mut scanned {
         m.ctx = preset_ctx(&ini, &m.id);
+        m.efforts = model_efforts(m);
     }
     let mut router = router_models(&s).await;
     // A drive was plugged in or a model added: let a running router rescan.
@@ -452,12 +458,57 @@ pub fn preset_ctx(ini: &str, id: &str) -> Option<u64> {
 /// Pi's provider id for local models. `local/<model>` in its model picker.
 pub const PI_PROVIDER: &str = "local";
 
-pub fn pi_provider(s: &Settings, models: &[LocalModel], ini: &str) -> Value {
+/// The file holding a model's metadata: the model itself, or the first
+/// weights shard in its folder.
+fn weights_file(m: &LocalModel) -> Option<PathBuf> {
+    let p = Path::new(&m.path);
+    if p.is_file() {
+        return Some(p.to_path_buf());
+    }
+    let mut files: Vec<PathBuf> = std::fs::read_dir(p).ok()?.flatten().map(|e| e.path()).filter(|f| is_gguf(f) && !is_mmproj(f)).collect();
+    files.sort();
+    files.into_iter().next()
+}
+
+type EffortCache = std::collections::HashMap<(PathBuf, u64, Option<std::time::SystemTime>), Option<Vec<String>>>;
+static EFFORTS: std::sync::Mutex<Option<EffortCache>> = std::sync::Mutex::new(None);
+
+/// Reasoning efforts the model's chat template accepts, read from the GGUF
+/// header. Cached per file size and mtime; `None` means unrestricted.
+pub fn model_efforts(m: &LocalModel) -> Option<Vec<String>> {
+    let file = weights_file(m)?;
+    let meta = std::fs::metadata(&file).ok()?;
+    let key = (file.clone(), meta.len(), meta.modified().ok());
+    let mut cache = EFFORTS.lock().unwrap();
+    let cache = cache.get_or_insert_with(Default::default);
+    cache
+        .entry(key)
+        .or_insert_with(|| crate::gguf::chat_template(&file).and_then(|t| crate::gguf::template_efforts(&t)))
+        .clone()
+}
+
+/// Pi's `thinkingLevelMap` for a model whose template only accepts some
+/// efforts: supported levels pass through, the rest are hidden (`null`).
+/// "off" sends `none`, which llama-server turns into thinking disabled.
+pub fn thinking_map(efforts: &[String]) -> Value {
+    let mut m = json!({ "off": "none" });
+    for level in ["minimal", "low", "medium", "high", "xhigh", "max"] {
+        m[level] = if efforts.iter().any(|e| e == level) { json!(level) } else { Value::Null };
+    }
+    m
+}
+
+pub fn pi_provider(
+    s: &Settings,
+    models: &[LocalModel],
+    ini: &str,
+    efforts: &std::collections::HashMap<String, Vec<String>>,
+) -> Value {
     let entries: Vec<Value> = models
         .iter()
         .map(|m| {
             let ctx = preset_ctx(ini, &m.id).unwrap_or(32768);
-            json!({
+            let mut e = json!({
                 "id": m.id,
                 "name": m.id,
                 "reasoning": true,
@@ -465,7 +516,11 @@ pub fn pi_provider(s: &Settings, models: &[LocalModel], ini: &str) -> Value {
                 "contextWindow": ctx,
                 "maxTokens": (ctx / 4).clamp(4096, 32768),
                 "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
-            })
+            });
+            if let Some(list) = efforts.get(&m.id) {
+                e["thinkingLevelMap"] = thinking_map(list);
+            }
+            e
         })
         .collect();
     json!({
@@ -500,7 +555,8 @@ pub fn sync_pi() -> Result<bool, String> {
     if !doc.is_object() {
         return Err(format!("{} is not a JSON object; not touching it", path.display()));
     }
-    let provider = pi_provider(&s, &models, &ini);
+    let efforts = models.iter().filter_map(|m| Some((m.id.clone(), model_efforts(m)?))).collect();
+    let provider = pi_provider(&s, &models, &ini, &efforts);
     if doc["providers"][PI_PROVIDER] == provider {
         return Ok(false);
     }
@@ -573,7 +629,7 @@ mod tests {
 
     #[test]
     fn presets_give_bonsai_full_context() {
-        let bonsai = LocalModel { id: "Ternary-Bonsai-2-27B".into(), path: String::new(), size: 0, vision: true, status: String::new(), ctx: None, folder: String::new() };
+        let bonsai = LocalModel { id: "Ternary-Bonsai-2-27B".into(), path: String::new(), size: 0, vision: true, status: String::new(), ctx: None, folder: String::new(), efforts: None };
         let ini = default_presets(&[bonsai]);
         assert!(ini.contains("[*]\n"));
         assert!(ini.contains("[Ternary-Bonsai-2-27B]\n"));
@@ -592,20 +648,26 @@ mod tests {
     fn pi_provider_lists_every_model() {
         let s = Settings { model_dirs: vec!["/m".into()], llama_server: "x".into(), port: 8081 };
         let ms = vec![
-            LocalModel { id: "A".into(), path: String::new(), size: 0, vision: true, status: String::new(), ctx: None, folder: String::new() },
-            LocalModel { id: "B".into(), path: String::new(), size: 0, vision: false, status: String::new(), ctx: None, folder: String::new() },
+            LocalModel { id: "A".into(), path: String::new(), size: 0, vision: true, status: String::new(), ctx: None, folder: String::new(), efforts: None },
+            LocalModel { id: "B".into(), path: String::new(), size: 0, vision: false, status: String::new(), ctx: None, folder: String::new(), efforts: None },
         ];
-        let p = pi_provider(&s, &ms, "[*]\nctx-size = 8192\n[A]\nctx-size = 262144\n");
+        let efforts = [("A".to_string(), vec!["xhigh".to_string(), "medium".into(), "low".into()])].into();
+        let p = pi_provider(&s, &ms, "[*]\nctx-size = 8192\n[A]\nctx-size = 262144\n", &efforts);
         assert_eq!(p["baseUrl"], "http://127.0.0.1:8081/v1");
         assert_eq!(p["models"][0]["contextWindow"], 262144);
         assert_eq!(p["models"][0]["input"], json!(["text", "image"]));
         assert_eq!(p["models"][1]["contextWindow"], 8192);
         assert_eq!(p["models"][1]["maxTokens"], 4096);
+        let map = &p["models"][0]["thinkingLevelMap"];
+        assert_eq!(map["off"], "none");
+        assert_eq!(map["medium"], "medium");
+        assert!(map["high"].is_null() && map["minimal"].is_null());
+        assert!(p["models"][1].get("thinkingLevelMap").is_none(), "unrestricted models keep Pi's defaults");
     }
 
     #[test]
     fn merge_takes_router_status() {
-        let scanned = vec![LocalModel { id: "a".into(), path: String::new(), size: 1, vision: false, status: "unloaded".into(), ctx: None, folder: String::new() }];
+        let scanned = vec![LocalModel { id: "a".into(), path: String::new(), size: 1, vision: false, status: "unloaded".into(), ctx: None, folder: String::new(), efforts: None }];
         let router = vec![json!({ "id": "a", "status": { "value": "loaded" } })];
         assert_eq!(merge(scanned, &router)[0].status, "loaded");
     }

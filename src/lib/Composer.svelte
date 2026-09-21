@@ -2,6 +2,7 @@
   import { api } from "./api";
   import type { ConfigOption } from "./reduce";
   import ModelPicker from "./ModelPicker.svelte";
+  import { local } from "./local.svelte";
 
   let {
     threadId,
@@ -61,6 +62,18 @@
     }
   }
 
+  // A local model whose chat template only takes some reasoning efforts:
+  // offer just those (plus off), so the menu can't pick one it rejects.
+  const localModel = $derived.by(() => {
+    const v = config.find((o) => o.id === "model")?.currentValue ?? "";
+    return v.startsWith("local/") ? local.state?.models.find((m) => m.id === v.slice(6)) : undefined;
+  });
+  function choices(opt: ConfigOption) {
+    const efforts = localModel?.efforts;
+    if (opt.id !== "thought_level" || !efforts) return opt.options;
+    return opt.options.filter((o) => o.value === "off" || efforts.includes(o.value) || o.value === opt.currentValue);
+  }
+
   /** Strip the agent's redundant prefixes ("Thinking: high", "bonsai/Bonsai…"). */
   function short(opt: ConfigOption, name: string) {
     return name.replace(/^Thinking:\s*/i, "").replace(/^[\w.-]+\//, "");
@@ -84,7 +97,7 @@
       <label class="opt" class:setting={setting === opt.id} title={opt.name}>
         <span class="k">{(opt.category ?? opt.id).replace("thought_level", "thinking")}</span>
         <select value={opt.currentValue} disabled={busy} onchange={(e) => change(opt, e.currentTarget.value)}>
-          {#each opt.options as o}
+          {#each choices(opt) as o}
             <option value={o.value}>{short(opt, o.name)}</option>
           {/each}
         </select>

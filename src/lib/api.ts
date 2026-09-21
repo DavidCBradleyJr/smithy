@@ -103,6 +103,8 @@ export interface LocalModel {
   status: string;
   ctx: number | null;
   folder: string;
+  /** Reasoning efforts its chat template accepts; null if unrestricted. */
+  efforts: string[] | null;
 }
 
 export interface LocalState {

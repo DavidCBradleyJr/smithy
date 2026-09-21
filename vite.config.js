@@ -9,11 +9,12 @@ const host = process.env.TAURI_DEV_HOST;
 // vite-plugin-svelte then can't serve that component's CSS ("failed to load
 // virtual css module"), leaving the page unstyled. Dropping the conditional
 // request headers forces a fresh compile on every load.
+/** @type {import('vite').Plugin} */
 const noConditionalRequests = {
   name: "smithy:no-conditional-requests",
   apply: "serve",
   configureServer(server) {
-    server.middlewares.use((req, _res, next) => {
+    server.middlewares.use((/** @type {{ headers: Record<string, unknown> }} */ req, _res, next) => {
       delete req.headers["if-none-match"];
       delete req.headers["if-modified-since"];
       next();

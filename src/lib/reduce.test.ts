@@ -64,4 +64,17 @@ describe("reduce", () => {
     const v = reduce([upd({ sessionUpdate: "config_option_update", configOptions: [{ ...config[0], currentValue: "x" }] })]);
     expect(v.config[0].currentValue).toBe("x");
   });
+
+  it("turns Pi's retry chatter into one note, not an answer", () => {
+    const v = reduce([
+      { t: "user", text: "who are you?", at: 1 },
+      upd({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Retrying (attempt 1/3, waiting 2s)..." } }),
+      upd({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Retrying (attempt 2/3, waiting 4s)..." } }),
+      upd({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Retry finished, resuming." } }),
+      { t: "error", message: "The local model rejected the request: Unexpected reasoning effort high." },
+      { t: "stop", reason: "end_turn", at: 5 },
+    ]);
+    expect(v.items.map((i) => i.kind)).toEqual(["user", "note", "error", "stop"]);
+    expect((v.items[1] as any).text).toBe("Model request failed; Retry finished, resuming.");
+  });
 });
