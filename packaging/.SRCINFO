@@ -1,0 +1,22 @@
+pkgbase = smithy
+	pkgdesc = Local-first coding agent workbench for Omarchy: local models and ACP agents in one window
+	pkgver = 0.1.0
+	pkgrel = 1
+	url = https://github.com/DavidCBradleyJr/smithy
+	arch = x86_64
+	license = MIT
+	makedepends = cargo
+	makedepends = npm
+	depends = webkit2gtk-4.1
+	depends = gtk3
+	depends = libsoup3
+	depends = git
+	depends = nodejs
+	depends = npm
+	optdepends = llama.cpp: local models (any build with router mode, or a fork such as PrismML for Bonsai)
+	optdepends = libnotify: desktop notifications when an agent finishes or needs approval
+	options = !lto
+	source = smithy-0.1.0.tar.gz::https://github.com/DavidCBradleyJr/smithy/archive/refs/tags/v0.1.0.tar.gz
+	sha256sums = 43ed4deb732377602f5c6f850cf809e4d7b7e4b81d819ff0dfdacdfdc499246e
+
+pkgname = smithy
