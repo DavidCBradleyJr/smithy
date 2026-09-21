@@ -27,11 +27,14 @@ Status: early but usable. A bar widget for omarchy-shell is next.
 
 ## Install
 
-Arch / Omarchy: build the package in `packaging/`:
+Arch / Omarchy: download the package from the
+[latest release](https://github.com/DavidCBradleyJr/smithy/releases/latest) and install it:
 
 ```bash
-cd packaging && makepkg -si
+sudo pacman -U smithy-0.1.0-1-x86_64.pkg.tar.zst
 ```
+
+Or build it from source with `makepkg -si` in `packaging/`.
 
 It installs `smithy`, a desktop entry and icons. You also need a `llama-server` with
 router mode for local models, and the CLIs of the agents you want.
